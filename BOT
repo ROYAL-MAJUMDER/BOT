@@ -1,0 +1,107 @@
+import os
+import asyncio
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+from instaloader import Instaloader, Post
+from TikTokApi import TikTokApi
+import aiohttp
+
+# Configuration
+UPLOAD_API_URL = "URL"  
+VIDEOS_DIR = "./videos" 
+# Initialize Instaloader
+insta_loader = Instaloader()
+
+# Ensure the videos directory exists
+os.makedirs(VIDEOS_DIR, exist_ok=True)
+
+# Function: Download Instagram Video
+async def download_instagram_video(url: str, download_dir: str):
+    try:
+        shortcode = url.split("/")[-2]
+        post = Post.from_shortcode(insta_loader.context, shortcode)
+        filepath = os.path.join(download_dir, f"{shortcode}.mp4")
+        insta_loader.download_post(post, target=download_dir)
+        print(f"Downloaded Instagram video to {filepath}")
+        return filepath
+    except Exception as e:
+        print(f"Error downloading Instagram video: {e}")
+        return None
+
+# Function: Download TikTok Video
+async def download_tiktok_video(url: str, download_dir: str):
+    try:
+        with TikTokApi() as api:
+            video_data = api.video(url=url).bytes()
+            filename = f"tiktok_{url.split('/')[-1]}.mp4"
+            filepath = os.path.join(download_dir, filename)
+            with open(filepath, "wb") as f:
+                f.write(video_data)
+            print(f"Downloaded TikTok video to {filepath}")
+            return filepath
+    except Exception as e:
+        print(f"Error downloading TikTok video: {e}")
+        return None
+
+# Function: Upload Video to API
+async def upload_video(filepath: str):
+    try:
+        async with aiohttp.ClientSession() as session:
+            with open(filepath, "rb") as file:
+                files = {'file': file}
+                async with session.post(UPLOAD_API_URL, data=files) as resp:
+                    if resp.status == 200:
+                        print(f"Uploaded {filepath} successfully")
+                        os.remove(filepath)  # Delete file after upload
+                    else:
+                        print(f"Failed to upload {filepath}: {resp.status}")
+    except Exception as e:
+        print(f"Error uploading video {filepath}: {e}")
+
+# File System Event Handler
+class VideoHandler(FileSystemEventHandler):
+    def on_created(self, event):
+        if event.src_path.endswith(".mp4"):
+            print(f"New file detected: {event.src_path}")
+            asyncio.run(upload_video(event.src_path))
+
+# Function: Monitor Directory for New Videos
+def monitor_directory(directory: str):
+    observer = Observer()
+    event_handler = VideoHandler()
+    observer.schedule(event_handler, directory, recursive=False)
+    observer.start()
+    print(f"Monitoring directory: {directory}")
+    try:
+        while True:
+            asyncio.sleep(1)
+    except KeyboardInterrupt:
+        observer.stop()
+    observer.join()
+
+# Main Function
+async def main():
+    
+    instagram_url = "URL"  
+    tiktok_url = "URL"  
+
+    # Download videos concurrently
+    tasks = [
+        download_instagram_video(instagram_url, VIDEOS_DIR),
+        download_tiktok_video(tiktok_url, VIDEOS_DIR)
+    ]
+    downloaded_files = await asyncio.gather(*tasks)
+
+    # Filter out None values (in case of errors)
+    downloaded_files = [file for file in downloaded_files if file]
+
+    # Upload videos concurrently
+    upload_tasks = [upload_video(filepath) for filepath in downloaded_files]
+    await asyncio.gather(*upload_tasks)
+
+    # Monitor the directory for new videos
+    monitor_directory(VIDEOS_DIR)
+
+# Entry Point
+if __name__ == "__main__":
+    asyncio.run(main())
